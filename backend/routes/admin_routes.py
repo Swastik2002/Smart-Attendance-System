@@ -4,6 +4,8 @@ from werkzeug.utils import secure_filename
 from models import Student, Faculty, Subject, Enrollment
 from db import db
 from services.student_service import save_student_images, enroll_student_in_all_subjects
+
+# CALL THE FUNCTION train_student_face (single student) from face_service
 from services.face_service import train_student_face
 
 admin_bp = Blueprint('admin', __name__)
@@ -47,16 +49,23 @@ def add_student():
         db.session.add(student)
         db.session.commit()
 
-        save_student_images(student.id, images)
+        # save uploaded images into UPLOAD_FOLDER/<student_id>/
+        saved = save_student_images(student.id, images)
 
-        train_student_face(student.id)
+        # Copy student's images to known_faces and return summary
+        try:
+            train_result = train_student_face(student.id)
+        except Exception as te:
+            current_app.logger.exception("Face training failed after adding student")
+            train_result = {"error": str(te)}
 
+        # enroll student in all subjects
         enroll_student_in_all_subjects(student.id)
 
         return jsonify({
             'success': True,
             'message': 'Student added successfully',
-            'data': {'id': student.id}
+            'data': {'id': student.id, 'saved_files': saved, 'train_result': train_result}
         })
 
     except Exception as e:
@@ -151,23 +160,17 @@ def add_subject():
 @face_bp.route('/train', methods=['POST'])
 def train_face():
     try:
-        data = request.json
-        student_id = data.get('student_id')
-
-        if not student_id:
-            return jsonify({
-                'success': False,
-                'message': 'Student ID is required'
-            }), 400
-
-        train_student_face(student_id)
-
+        data = request.json or {}
+        # keep legacy behavior: accept an optional student_id, but trainer retrains all
+        # student_id = data.get('student_id')  # currently unused by LBPH retrain
+        result = train_student_face()
         return jsonify({
             'success': True,
-            'message': 'Face training completed successfully'
+            'message': 'Face training completed successfully',
+            'result': result
         })
-
     except Exception as e:
+        current_app.logger.exception("Face training error")
         return jsonify({
             'success': False,
             'message': str(e)

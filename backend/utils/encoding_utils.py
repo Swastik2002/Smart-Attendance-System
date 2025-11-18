@@ -1,20 +1,35 @@
+# utils/encoding_utils.py
 import os
-import pickle
-from config import Config
+import json
+from flask import current_app
 
-def load_encodings():
-    encodings_file = Config.ENCODINGS_FILE
+def get_model_dir():
+    # models stored inside UPLOAD_FOLDER/models by default
+    upload_folder = current_app.config.get("UPLOAD_FOLDER", "uploads")
+    model_dir = os.path.join(upload_folder, "models")
+    os.makedirs(model_dir, exist_ok=True)
+    return model_dir
 
-    if os.path.exists(encodings_file):
-        with open(encodings_file, 'rb') as f:
-            return pickle.load(f)
-    else:
-        return {}
+def labels_path():
+    return os.path.join(get_model_dir(), "labels.json")
 
-def save_encodings(encodings_data):
-    encodings_file = Config.ENCODINGS_FILE
+def model_path():
+    return os.path.join(get_model_dir(), "lbph_model.yml")
 
-    with open(encodings_file, 'wb') as f:
-        pickle.dump(encodings_data, f)
-
+def save_label_map(label_map: dict):
+    """
+    label_map: dict mapping student_id (str or int) -> label_index (int)
+    """
+    p = labels_path()
+    with open(p, "w") as f:
+        json.dump({str(k): int(v) for k, v in label_map.items()}, f)
     return True
+
+def load_label_map():
+    p = labels_path()
+    if not os.path.exists(p):
+        return {}
+    with open(p, "r") as f:
+        data = json.load(f)
+    # keys are strings in file — keep them as str for consistent lookups
+    return {str(k): int(v) for k, v in data.items()}
