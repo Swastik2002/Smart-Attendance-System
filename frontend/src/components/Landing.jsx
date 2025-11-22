@@ -19,7 +19,7 @@ function Landing() {
           color: '#2d3748',
           fontWeight: 'bold'
         }}>
-          College Attendance System
+          Smart Attendance System
         </h1>
         <p style={{
           color: '#718096',
