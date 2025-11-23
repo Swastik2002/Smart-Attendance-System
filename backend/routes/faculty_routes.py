@@ -1,4 +1,3 @@
-# backend/routes/faculty_routes.py
 from flask import Blueprint, request, jsonify, url_for, current_app, make_response
 from models import Subject, Student, Enrollment, Attendance
 from db import db
@@ -59,6 +58,7 @@ def get_students():
         current_app.logger.exception("get_students error")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 @attendance_bp.route('/mark', methods=['POST'])
 def mark_attendance():
     try:
@@ -78,6 +78,7 @@ def mark_attendance():
     except Exception as e:
         current_app.logger.exception("mark_attendance error")
         return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @attendance_bp.route('/mark_from_face', methods=['POST'])
 def mark_attendance_from_face():
@@ -125,21 +126,21 @@ def mark_attendance_from_face():
         for r in results:
             sid = r.get('student_id')
             r['already_marked'] = False
-            # if matched and we have a student id, look up official name from DB
+
+            # If deepface returned a numeric student_id, try to resolve official name from DB.
             if sid is not None:
                 try:
                     student = Student.query.get(int(sid))
                     if student:
-                        # prefer student.name from DB
                         r['student_name'] = getattr(student, 'name', r.get('student_name') or str(sid))
-                    # check existing attendance for parsed_date
+                    # check for existing attendance for parsed_date
                     existing = Attendance.query.filter_by(student_id=sid, subject_id=subject_id, date=parsed_date).first()
                     if existing:
                         r['already_marked'] = True
                 except Exception:
                     current_app.logger.exception("error looking up student for id %s", sid)
 
-            # ensure student_name exists for unknown faces
+            # ensure student_name exists
             if not r.get('student_name'):
                 r['student_name'] = 'UNKNOWN'
 
@@ -153,6 +154,7 @@ def mark_attendance_from_face():
         current_app.logger.exception("mark_attendance_from_face error: %s", str(e))
         current_app.logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @faculty_bp.route('/submit_attendance', methods=['POST'])
 def submit_attendance():
@@ -179,6 +181,7 @@ def submit_attendance():
     except Exception as e:
         current_app.logger.exception("submit_attendance error")
         return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @faculty_bp.route('/download_attendance', methods=['GET'])
 def download_attendance():
@@ -232,4 +235,134 @@ def download_attendance():
 
     except Exception as e:
         current_app.logger.exception("download_attendance error")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@faculty_bp.route('/attendance_dates', methods=['GET'])
+def get_attendance_dates():
+    """
+    Query params:
+      - subject_id (required)
+    Returns: list of dates (newest first)
+    """
+    try:
+        subject_id = request.args.get('subject_id')
+        if not subject_id:
+            return jsonify({'success': False, 'message': 'subject_id is required'}), 400
+
+        # get distinct dates for this subject
+        rows = db.session.query(Attendance.date).filter_by(subject_id=subject_id).distinct().order_by(Attendance.date.desc()).all()
+        dates = [r[0].strftime('%Y-%m-%d') for r in rows]
+        return jsonify({'success': True, 'dates': dates})
+    except Exception as e:
+        current_app.logger.exception("get_attendance_dates error")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@faculty_bp.route('/attendance', methods=['GET'])
+def get_attendance_for_date():
+    """
+    Query params:
+      - subject_id (required)
+      - date (YYYY-MM-DD) required
+    Returns: { success: True, students: [ { id, name, roll, present (bool), confidence } ... ] }
+    """
+    try:
+        subject_id = request.args.get('subject_id')
+        date_str = request.args.get('date')
+        if not subject_id or not date_str:
+            return jsonify({'success': False, 'message': 'subject_id and date are required'}), 400
+
+        parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+
+        # students enrolled in this subject
+        enrolls = Enrollment.query.filter_by(subject_id=subject_id).all()
+        student_ids = [e.student_id for e in enrolls]
+        students = Student.query.filter(Student.id.in_(student_ids)).all()
+
+        out = []
+        for s in students:
+            att = Attendance.query.filter_by(student_id=s.id, subject_id=subject_id, date=parsed_date).first()
+            present = False
+            confidence = None
+            if att:
+                present = getattr(att, 'status', '').lower().startswith('p')
+                confidence = getattr(att, 'confidence', None)
+            out.append({
+                'id': s.id,
+                'name': getattr(s, 'name', '') or (getattr(getattr(s, 'user', None), 'name', '') or ''),
+                'roll': getattr(s, 'roll', '') or getattr(s, 'roll_no', '') or '',
+                'present': bool(present),
+                'confidence': confidence
+            })
+
+        # keep original student order from enrollments
+        id_to_obj = {o['id']: o for o in out}
+        ordered = [id_to_obj[sid] for sid in student_ids if sid in id_to_obj]
+
+        return jsonify({'success': True, 'students': ordered})
+    except Exception as e:
+        current_app.logger.exception("get_attendance_for_date error")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@faculty_bp.route('/attendance_update', methods=['POST'])
+def update_attendance():
+    """
+    Body JSON:
+      {
+        subject_id: <id>,
+        date: 'YYYY-MM-DD',
+        time: 'HH:MM' (optional),
+        entries: [ { student_id, present (bool), confidence (optional) }, ... ]
+      }
+    If record exists -> update; otherwise create.
+    """
+    try:
+        data = request.get_json() or {}
+        subject_id = data.get('subject_id')
+        date_str = data.get('date')
+        time_str = data.get('time')  # optional
+        entries = data.get('entries', [])
+
+        if not subject_id or not date_str:
+            return jsonify({'success': False, 'message': 'subject_id and date are required'}), 400
+
+        parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        parsed_time = None
+        if time_str:
+            try:
+                parsed_time = datetime.strptime(time_str, "%H:%M").time()
+            except Exception:
+                parsed_time = None
+
+        results = []
+        for e in entries:
+            sid = e.get('student_id')
+            present = bool(e.get('present'))
+            conf = e.get('confidence', None)
+            if sid is None:
+                continue
+
+            # find existing attendance
+            att = Attendance.query.filter_by(student_id=sid, subject_id=subject_id, date=parsed_date).first()
+            if att:
+                att.status = 'Present' if present else 'Absent'
+                if parsed_time:
+                    att.time = parsed_time
+                if conf is not None:
+                    att.confidence = conf
+                db.session.add(att)
+                results.append({'student_id': sid, 'action': 'updated'})
+            else:
+                # create new record; require time else default to 00:00
+                t = parsed_time or datetime.strptime("08:00", "%H:%M").time()
+                new = Attendance(student_id=sid, subject_id=subject_id, date=parsed_date, time=t, status=('Present' if present else 'Absent'), confidence=conf)
+                db.session.add(new)
+                results.append({'student_id': sid, 'action': 'created'})
+
+        db.session.commit()
+        return jsonify({'success': True, 'results': results, 'updated_count': len(results)})
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("update_attendance error")
         return jsonify({'success': False, 'message': str(e)}), 500

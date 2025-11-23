@@ -22,8 +22,10 @@ export default function MarkAttendance() {
 
   const [imageSrc, setImageSrc] = useState(null);
   const [matches, setMatches] = useState([]); // results array from backend
+  const [serverAnnotated, setServerAnnotated] = useState(false); // NEW: skip client overlays if server already annotated image
   const imgRef = useRef(null);
   const canvasRef = useRef(null);
+  const headerCheckboxRef = useRef(null); // new: select/unselect all checkbox
 
   const [dateVal, setDateVal] = useState(new Date().toISOString().slice(0, 10));
   const [timeVal, setTimeVal] = useState("08:00");
@@ -35,7 +37,23 @@ export default function MarkAttendance() {
   useEffect(() => {
     drawBoxes();
     // eslint-disable-next-line
-  }, [imageSrc, matches]);
+  }, [imageSrc, matches, serverAnnotated]);
+
+  // keep header checkbox state (checked/indeterminate) synced with students
+  useEffect(() => {
+    const ref = headerCheckboxRef.current;
+    if (!ref) return;
+    const nonDisabled = students.filter(s => !s.disabled);
+    if (nonDisabled.length === 0) {
+      ref.checked = false;
+      ref.indeterminate = false;
+      return;
+    }
+    const allChecked = nonDisabled.every(s => !!s.checked);
+    const noneChecked = nonDisabled.every(s => !s.checked);
+    ref.checked = allChecked;
+    ref.indeterminate = !allChecked && !noneChecked;
+  }, [students]);
 
   async function loadSubjects() {
     const res = await getSubjects();
@@ -47,6 +65,7 @@ export default function MarkAttendance() {
     setSelectedSubject(subjectId);
     setMatches([]);
     setImageSrc(null);
+    setServerAnnotated(false);
 
     if (!subjectId) {
       setStudents([]);
@@ -65,7 +84,18 @@ export default function MarkAttendance() {
     }
   }
 
+  // draw bounding boxes over annotated images (colors change based on match status)
   function drawBoxes() {
+    // if server returned an annotated image, avoid drawing overlays (prevents double boxes)
+    if (serverAnnotated) {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      return;
+    }
+
     const img = imgRef.current;
     const canvas = canvasRef.current;
     if (!img || !canvas || !imageSrc) return;
@@ -89,7 +119,8 @@ export default function MarkAttendance() {
     // dedupe by bbox position (string) to avoid duplicate overlays
     const seen = new Map();
     matches.forEach(m => {
-      const key = (m.bbox && m.bbox.join(",")) || (m.student_id ? `id_${m.student_id}` : `name_${m.name}`);
+      // canonical key prefers bbox coordinates; fall back to student id/name
+      const key = (m.bbox && m.bbox.join(",")) || (m.student_id ? `id_${m.student_id}` : `name_${m.student_name || m.name || ''}`);
       if (!seen.has(key)) seen.set(key, m);
     });
     const uniqueMatches = Array.from(seen.values());
@@ -102,7 +133,7 @@ export default function MarkAttendance() {
       if (bbox.length === 4) {
         const [a, b, c, d] = bbox;
         // support two bbox formats: either [x,y,w,h] or [top,right,bottom,left]
-        if (c > a && b > d && (b - d) > 0 && (c - a) > 0 && (a < 1000 && d < 1000)) {
+        if (c > a && b > d && (b - d) > 0 && (c - a) > 0 && (a < 10000 && d < 10000)) {
           // treat as top,right,bottom,left -> convert
           y = a;
           const right = b;
@@ -211,7 +242,9 @@ export default function MarkAttendance() {
     const annotated = res?.annotated_base64 || res?.data?.annotated_base64 || res?.data?.annotated_url || res?.annotated_url;
     if (annotated) {
       setImageSrc(annotated);
+      setServerAnnotated(true); // server already drew boxes/labels — don't draw canvas overlays
     } else {
+      setServerAnnotated(false);
       const reader = new FileReader();
       reader.onload = (ev) => setImageSrc(ev.target.result);
       reader.readAsDataURL(filesArray[0]);
@@ -223,6 +256,7 @@ export default function MarkAttendance() {
       m.already_marked = !!(m.already_marked || m.is_marked || m.alreadyMarked);
       if (!m.status) m.status = m.student_id ? 'matched' : 'unknown';
     });
+    // SERVER already dedupes; still set matches for student-check logic
     setMatches(built);
 
     // auto-check matched students but don't save yet; keep checkboxes editable
@@ -251,6 +285,14 @@ export default function MarkAttendance() {
     await handleFaceRecognition([f]);
   }
 
+  // new: toggle all non-disabled checkboxes
+  function handleToggleAllClick() {
+    const ref = headerCheckboxRef.current;
+    if (!ref) return;
+    const val = !!ref.checked;
+    setStudents(prev => prev.map(s => s.disabled ? s : { ...s, checked: val }));
+  }
+
   function toggleCheckbox(id) {
     setStudents(prev => prev.map(s => (s.id === id ? { ...s, checked: !s.checked } : s)));
   }
@@ -272,6 +314,7 @@ export default function MarkAttendance() {
         setStudents(prev => prev.map(s => ({ ...s, checked: false, disabled: false })));
         setMatches([]);
         setImageSrc(null);
+        setServerAnnotated(false);
       } else {
         setMessage(res?.message || "Failed to save attendance");
       }
@@ -309,7 +352,10 @@ export default function MarkAttendance() {
       <div className="header">
         <div className="header-content">
           <h2>Faculty Dashboard - {facultyName}</h2>
-          <button className="btn btn-danger" onClick={() => navigate("/")}>Logout</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" onClick={() => navigate('/faculty/edit-attendance')}>Edit Attendance</button>
+            <button className="btn btn-danger" onClick={() => navigate("/")}>Logout</button>
+          </div>
         </div>
       </div>
 
@@ -377,7 +423,16 @@ export default function MarkAttendance() {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ textAlign: "left" }}>
-                      <th>Present</th>
+                      <th>
+                        <input
+                          ref={headerCheckboxRef}
+                          type="checkbox"
+                          title="Select / Unselect all (respects disabled rows)"
+                          onChange={handleToggleAllClick}
+                          style={{ transform: 'scale(1.1)' }}
+                        />
+                        &nbsp; Present
+                      </th>
                       <th>Roll</th>
                       <th>Name</th>
                     </tr>

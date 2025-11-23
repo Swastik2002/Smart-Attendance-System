@@ -18,7 +18,7 @@ function Landing() {
           marginBottom: '10px',
           color: '#2d3748',
           fontWeight: 'bold'
-        }}>
+        }}><img src="./Smart_Attendance_System.png" alt="Smart Attendance System" width={"50px"} style={{ paddingRight: '5px' }} />
           Smart Attendance System
         </h1>
         <p style={{

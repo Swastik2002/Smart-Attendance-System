@@ -8,6 +8,7 @@ import AddStudent from './pages/Admin/AddStudent';
 import AddFaculty from './pages/Admin/AddFaculty';
 import AddSubject from './pages/Admin/AddSubject';
 import MarkAttendance from './pages/Faculty/MarkAttendance';
+import EditAttendance from './pages/Faculty/EditAttendance';
 import StudentDashboard from './pages/Student/StudentDashboard';
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
         <Route path="/admin/add-faculty" element={<AddFaculty />} />
         <Route path="/admin/add-subject" element={<AddSubject />} />
         <Route path="/faculty/mark-attendance" element={<MarkAttendance />} />
+        <Route path="/faculty/edit-attendance" element={<EditAttendance />} />
         <Route path="/student/dashboard" element={<StudentDashboard />} />
       </Routes>
     </Router>

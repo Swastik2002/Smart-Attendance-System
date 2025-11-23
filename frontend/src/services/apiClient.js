@@ -106,4 +106,32 @@ export const downloadAttendance = async (subjectId) => {
   }
 };
 
+export const getAttendanceDates = async (subjectId) => {
+  try {
+    const response = await apiClient.get(`/faculty/attendance_dates?subject_id=${subjectId}`);
+    return response.data;
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+};
+
+export const getAttendanceForDate = async (subjectId, date) => {
+  try {
+    const response = await apiClient.get(`/faculty/attendance?subject_id=${subjectId}&date=${date}`);
+    return response.data;
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+};
+
+export const updateAttendance = async (payload) => {
+  try {
+    const response = await apiClient.post("/faculty/attendance_update", payload);
+    return response.data;
+  } catch (error) {
+    return { success: false, message: error.response?.data?.message || error.message };
+  }
+};
+
+
 export default apiClient;
